@@ -1,6 +1,7 @@
 ---
 title: "Chargeback Fraud Prediction R Notebook"
-output: html_notebook
+output: html_notebook:
+keep_md: true
 ---
 
 ```{r setup, include=FALSE, cache = FALSE}
@@ -10,15 +11,12 @@ opts_knit$set(root.dir = '/home/myubu/R_projects_Github/chargeback_fraud_predict
 knitr::opts_chunk$set(fig.width=12, fig.height=8)  
 ```
 
-
 ```{r}
 getwd()
 #setwd()
 #list.files()
 cbf <- read.csv("df.csv")
 ```
-
-
 ```{r}
 # libraries
 oldw <- getOption("warn")
@@ -34,7 +32,6 @@ library(plotly)
 options(warn = oldw)
 ```
 
-
 ```{r}
 #kable(head(cbf))
 library(kableExtra)
@@ -42,8 +39,6 @@ head(cbf) %>%
   kable() %>%
   kable_styling(bootstrap_options = "striped", font_size = 12)
 ```
-
-
 ## This is a case for Univariate Time Series CLASSIFICATION.
 
 <span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic">**Let's gain some insights from the data avaialble using EDA** </p></span>
@@ -54,8 +49,7 @@ head(cbf_ts) %>%
   kable() %>%
   kable_styling(bootstrap_options = "striped", font_size = 12)
 ```
- 
-```{r}
+ ```{r}
 cbf_ts$Date <- as.POSIXct(cbf_ts$Date, format="%Y-%m-%d %H:%M:%S")
 str(cbf_ts)
 ```
@@ -153,4 +147,4 @@ ggplotly(p3)
 
 ```
 
-### Next, Let's Build a CLASSIFICATION model to predict future transactions
+### Next, Let's Build a CLASSIFICATION model to classify future transactions
