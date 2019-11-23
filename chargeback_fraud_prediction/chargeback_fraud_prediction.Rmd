@@ -1,7 +1,6 @@
 ---
 title: "Chargeback Fraud Prediction R Notebook"
-output: html_notebook:
-keep_md: true
+output: rmarkdown::github_document
 ---
 
 ```{r setup, include=FALSE, cache = FALSE}
@@ -92,10 +91,7 @@ p <- ggplot(cbf_ts, aes(x = day(Date), y = Amount, colour = cbf_ts$CBK)) + geom_
 
 ggplotly(p)
 ```
-
-
 <span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic">**All FRAUD Transactions have a monetary value of <= 1000 and there appears NO pattern by the Day for committing FRAUD transactions.Also, MOST High value transactions are happening between 25th & 28th days of the Month.**</p></span>
-
 
 ```{r, fig.width= 10, fig.height= 10}
 # Let's look at the Most active time of the day for transactions
@@ -115,7 +111,6 @@ ggplot(data = cbf_ts, aes(x = day(cbf_ts$Date), y = Amount, group = CBK, colour 
     labs(title="TREND of FRADULENT TRANSACTIONS by DATE ") +
     labs(x="DATE", y="AMOUNT")
 ```
-
 <span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic">**Most High Valued Fradulent transactions appear to be happening, in the Beginning of the month, and the Value of Fradulent Transactions is tapering down as it reaches Monthend. **</p></span>
 
 ```{r}
@@ -124,18 +119,12 @@ ggplot(data = cbf_ts, aes(x = hour(cbf_ts$Date), y = Amount, group = CBK, colour
     labs(title="TREND of FRADULENT TRANSACTIONS by HOUR ") +
     labs(x="HOUR", y="AMOUNT")
 ```
-
-
 <span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic; colour: red"> **The Value of Fradulent transactions appear to be increasing, as the Day progresses to Midnight starting from Afternoon around 3 o Clock.** </p></span>
 
 ```{r, fig.width=14, fig.height=8}
 plot(table(hour(cbf_ts$Date), day(cbf_ts$Date)), col = cbf_ts$Amount, main = "Transaction by Hour & Date")
 
 ```
-
-
-
-
 
 ```{r, fig.width= 10, fig.height= 10}
 p3 <- ggplot(tbl[order(tbl$Hour,decreasing=TRUE),], aes(Date, Freq, fill = Hour))+
