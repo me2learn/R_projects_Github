@@ -1,6 +1,7 @@
 ---
 title: "Chargeback Fraud Prediction R Notebook"
 output: rmarkdown::github_document
+always_allow_html: true
 ---
 
 ```{r setup, include=FALSE, cache = FALSE}
@@ -127,6 +128,9 @@ plot(table(hour(cbf_ts$Date), day(cbf_ts$Date)), col = cbf_ts$Amount, main = "Tr
 ```
 
 ```{r, fig.width= 10, fig.height= 10}
+tbl <- table(day(cbf_ts$Date), hour(cbf_ts$Date))
+tbl <- as.data.frame(tbl)
+names(tbl) <- c("Date", "Hour", "Freq")
 p3 <- ggplot(tbl[order(tbl$Hour,decreasing=TRUE),], aes(Date, Freq, fill = Hour))+
   geom_bar(stat="identity") + labs(title="No. of Transactions within the Hour by DAY")
 
