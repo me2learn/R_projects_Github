@@ -29,15 +29,22 @@ library(skimr)
 library(knitr)
 library(plotly)
 
+library(forecast)
+
+library(ROCR)
+library(pROC)
+
 options(warn = oldw)
 ```
 
 ```{r}
-#kable(head(cbf))
+oldw <- getOption("warn")
+options(warn = -1)
 library(kableExtra)
 head(cbf) %>%
   kable() %>%
   kable_styling(bootstrap_options = "striped", font_size = 12)
+options(warn = oldw)
 ```
 ## This is a case for Univariate Time Series CLASSIFICATION.
 
@@ -85,10 +92,6 @@ ggplotly(p)
 p <- ggplot(cbf_ts, aes(x = day(Date), y = Amount, colour = cbf_ts$CBK)) + geom_point() + 
       labs(title="Value of Transactions by Date") +
       labs(x="DATE", y="Amount") 
-
-#p <- p + guides(fill=guide_legend(title="New Legend Title"))
-
-#p <- p+labs(fill = "CBK")
 
 ggplotly(p)
 ```
@@ -141,3 +144,430 @@ ggplotly(p3)
 ```
 
 ### Next, Let's Build a CLASSIFICATION model to classify future transactions
+
+```{r}
+chbk <- cbf_ts[c("Date", "Amount", "CBK")]
+
+str(chbk)
+
+cbf_class <- chbk[c("Date", "CBK")]
+cbf_class$CBK <- ifelse(cbf_class$CBK == "No", 0, 1)
+cbf_class$CBK <- as.factor(as.character(cbf_class$CBK))
+nperiods <- length(cbf_class$CBK)
+cbf_class$Lag1 <- c(NA, cbf_class$CBK[1:(nperiods-1)])
+cbf_class$t <- seq(1, nperiods, 1)
+
+cbf_class$Seasonal_sine = sin(2*pi*cbf_class$t / (365.25*24*60))
+cbf_class$Seasonal_cosine = cos(2*pi*cbf_class$t / (365.25*24*60))
+```
+
+```{r}
+# We will take a look at the distribution of the Target Variable
+print(table(cbf_class$CBK))
+
+print(prop.table(table(cbf_class$CBK)),1)
+
+b<-barplot(table(cbf_class$CBK), col = "cyan", main = "Distribution of Target Variable", width = 0.1)
+
+text(x=b, y= table(cbf_class$CBK)/2, 
+     labels=as.character(table(cbf_class$CBK)))
+
+```
+
+<span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic"> As we can see there is a huge class imbalance with majority class @ 95% and Minority class @ 5%. we will try to deal with this by using some sampling Techniques. </p></span>
+
+```{r}
+# we have a total of 11127 rows, 80% of this number is 8901.6, rounding it off choosing the first 8905 rows for training, 
+# so we have all data points until 25th.
+
+train.df <- cbf_class[cbf_class$Date <= "2015-05-25 23:53:19",]
+train.df <- train.df[-1,]
+
+valid.df <- cbf_class[cbf_class$Date > "2015-05-25 23:53:19",]
+xvalid <- valid.df[, c(3,5,6)]
+
+levels(train.df$CBK) <- make.names(levels(factor(train.df$CBK)))
+levels(valid.df$CBK) <- make.names(levels(factor(valid.df$CBK)))
+
+```
+
+```{r}
+# Build a standard classifier using Logistic Regression, without any sampling
+
+# Setting the Control Parameters for the Model
+ctrl <- trainControl(method = "repeatedcv",
+                     number = 10,
+                     repeats = 5,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE,
+                     savePredictions = "final")
+
+# We will use AUC ROC as our performance metric.
+
+set.seed(5627)
+
+orig_fit <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine,
+                  data = train.df,
+                  method = "glm",
+                  family = "binomial",
+                  metric = "ROC",
+                  trControl = ctrl)
+
+preds_orig <- predict(orig_fit,xvalid)
+confusionMatrix(preds_orig, valid.df$CBK, mode = "prec_recall", positive="X1")
+
+# with no sampling, we are getting AUC of 62.21
+
+# Now let's try up sampling and see, if we get better AUC
+set.seed(5627)
+ctrl$sampling <- "up"
+
+up_fit <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine,
+                  data = train.df,
+                  method = "glm",
+                  family = "binomial",
+                  metric = "ROC",
+                  trControl = ctrl)
+
+preds_up <- predict(up_fit,xvalid)
+confusionMatrix(preds_up, valid.df$CBK, mode = "prec_recall", positive="X1")
+
+# with up sampling, we are getting AUC of 50
+
+# Now let's try SMOTE sampling and see, if we get better AUC
+
+set.seed(5627)
+ctrl$sampling <- "smote"
+
+smote_fit <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine,
+                  data = train.df,
+                  method = "glm",
+                  family = "binomial",
+                  metric = "ROC",
+                  trControl = ctrl)
+
+preds_smote <- predict(smote_fit,xvalid)
+confusionMatrix(preds_smote, valid.df$CBK, mode = "prec_recall", positive="X1")
+
+# with smote sampling, we are getting AUC of 55
+
+#now let's try sampling using ROSE library to see, if it improves the AUC score
+
+library(ROSE)
+set.seed(5627)
+data.rose <- ROSE(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                  data=train.df, seed = 1)$data
+table(data.rose$CBK)
+
+rose_fit <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                 data=data.rose, 
+                 method="glm", 
+                 metric="ROC", 
+                 trControl=ctrl)
+
+preds_rose <- predict(rose_fit,xvalid)
+confusionMatrix(preds_rose, valid.df$CBK, mode = "prec_recall", positive="X1")
+
+# with smote sampling, we are getting AUC of 64.61
+
+# Plotting the ROC curve, to see the performance of different sampling techniques
+
+
+preds_orig<- ifelse(preds_orig == "X0", 0, 1)
+preds_up <- ifelse(preds_up == "X0", 0, 1)
+preds_smote <- ifelse(preds_smote == "X0", 0, 1)
+preds_rose <- ifelse(preds_rose == "X0", 0, 1)
+
+roc_curves <- plot.roc(valid.df$CBK, preds_orig, print.auc = TRUE, col = "blue", print.auc.x = 0.2, print.auc.y = 0.15, main = "Logistic Regression with different sampling Methods" )
+roc_curves <- plot.roc(valid.df$CBK, preds_up, print.auc = TRUE, col = "red", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.1 )
+
+roc_curves <- plot.roc(valid.df$CBK, preds_smote, print.auc = TRUE, col = "burlywood4", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.05 )
+
+roc_curves <- plot.roc(valid.df$CBK, preds_rose, print.auc = TRUE, col = "chartreuse", add = TRUE, print.auc.x = 0.2, print.auc.y = 0 )
+
+legend("bottomright", legend=c("NO sampling", "UP", "SMOTE", "ROSE"),
+       col=c("blue", "red", "burlywood4", "chartreuse"), lwd=2)
+```
+
+<span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic"> As observed from the above plot, ROSE sampling is giving us better AUC. so we will proceed with ROSE sampling and try different classifiers and see, if we can achieve better AUC score. </p></span>
+
+```{r}
+
+control <- trainControl(method = "repeatedcv",
+                     number = 10,
+                     repeats = 5,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE,
+                     savePredictions = "final")
+seed = 5627
+metric = "ROC"
+
+set.seed(seed)
+fit.lda <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                 data=train.df, 
+                 method="lda", 
+                 metric=metric, 
+                 #preProc=c("center", "scale"), 
+                 trControl=ctrl)
+
+# Logistic Regression
+set.seed(seed)
+fit.glm <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                 data=data.rose, 
+                 method="glm", 
+                 metric=metric, 
+                 trControl=control)
+
+
+# SVM Radial
+set.seed(seed)
+fit.svmRadial <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                       data=data.rose, 
+                       method="svmRadial", 
+                       metric=metric, 
+                       #preProc=c("center", "scale"), 
+                       trControl=control, 
+                       fit=FALSE)
+# kNN
+set.seed(seed)
+fit.knn <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                 data=data.rose, 
+                 method="knn", 
+                 metric=metric, 
+                 #preProc=c("center", "scale"), 
+                 trControl=control)
+# Naive Bayes
+set.seed(seed)
+fit.nb <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                data=data.rose, 
+                method="nb", 
+                metric=metric, 
+                trControl=control)
+# CART
+set.seed(seed)
+fit.cart <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                  data=data.rose, 
+                  method="rpart", 
+                  metric=metric, 
+                  trControl=control)
+
+# Bagged CART
+set.seed(seed)
+fit.treebag <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                     data=data.rose, 
+                     method="treebag", 
+                     metric=metric, 
+                     trControl=control)
+# Random Forest
+set.seed(seed)
+fit.rf <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                data=data.rose, 
+                method="rf", 
+                metric=metric, 
+                trControl=control)
+
+# Stochastic Gradient Boosting (Generalized Boosted Modeling)
+set.seed(seed)
+fit.gbm <- train(CBK ~ Lag1 + Seasonal_sine + Seasonal_cosine, 
+                 data=data.rose, 
+                 method="gbm", 
+                 metric=metric, 
+                 trControl=control, 
+                 verbose=FALSE)
+
+
+results <- resamples(list(lda=fit.lda, logistic=fit.glm,
+                          svm=fit.svmRadial, knn=fit.knn, nb=fit.nb, cart=fit.cart,
+                          bagging=fit.treebag, rf=fit.rf, gbm=fit.gbm))
+# Table comparison
+print(summary(results))
+
+# boxplot comparison
+print(bwplot(results))
+# Dot-plot comparison
+print(dotplot(results))
+```
+
+```{r}
+
+preds_LDA <- predict(fit.lda,xvalid)
+print(confusionMatrix(preds_LDA, valid.df$CBK, mode = "prec_recall", positive = "X1"))
+
+preds_GLM <- predict(fit.glm,xvalid)
+confusionMatrix(preds_GLM, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_SVM <- predict(fit.svmRadial,xvalid)
+confusionMatrix(preds_SVM, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_KNN <- predict(fit.knn,xvalid)
+confusionMatrix(preds_KNN, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_NB <- predict(fit.nb,xvalid)
+confusionMatrix(preds_NB, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_CART <- predict(fit.cart,xvalid)
+confusionMatrix(preds_CART, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_TBAG <- predict(fit.treebag,xvalid)
+confusionMatrix(preds_TBAG, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_RF <- predict(fit.rf,xvalid)
+confusionMatrix(preds_RF, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+preds_GBM <- predict(fit.gbm,xvalid)
+confusionMatrix(preds_GBM, valid.df$CBK, mode = "prec_recall", positive = "X1")
+
+
+valid.df$CBK <- ifelse(valid.df$CBK == "X0", 0, 1)
+preds_LDA <- ifelse(preds_LDA == "X0", 0, 1)
+preds_GLM <- ifelse(preds_GLM == "X0", 0, 1)
+preds_SVM <- ifelse(preds_SVM == "X0", 0, 1)
+preds_KNN <- ifelse(preds_KNN == "X0", 0, 1)
+preds_NB <- ifelse(preds_NB == "X0", 0, 1)
+preds_CART <- ifelse(preds_CART == "X0", 0, 1)
+preds_TBAG <- ifelse(preds_TBAG == "X0", 0, 1)
+preds_RF <- ifelse(preds_RF == "X0", 0, 1)
+preds_GBM <- ifelse(preds_GBM == "X0", 0, 1)
+
+roc_LDA <- roc(valid.df$CBK, preds_LDA)
+roc_GLM <- roc(valid.df$CBK, preds_GLM)
+roc_SVM <- roc(valid.df$CBK, preds_SVM)
+roc_KNN <- roc(valid.df$CBK, preds_KNN)
+roc_NB <- roc(valid.df$CBK, preds_NB)
+roc_CART <- roc(valid.df$CBK, preds_CART)
+roc_TBAG <- roc(valid.df$CBK, preds_TBAG)
+roc_RF <- roc(valid.df$CBK, preds_RF)
+roc_GBM <- roc(valid.df$CBK, preds_GBM)
+
+roc_curves <- plot.roc(valid.df$CBK, preds_LDA, print.auc = TRUE, col = "blue", print.auc.x = 0.2, print.auc.y = 0.43, main = "AUC score of different Classifiers" )
+roc_curves <- plot.roc(valid.df$CBK, preds_GLM, print.auc = TRUE, col = "red", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.38 )
+roc_curves <- plot.roc(valid.df$CBK, preds_SVM, print.auc = TRUE, col = "burlywood4", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.33 )
+roc_curves <- plot.roc(valid.df$CBK, preds_KNN, print.auc = TRUE, col = "chartreuse", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.28 )
+roc_curves <- plot.roc(valid.df$CBK, preds_NB, print.auc = TRUE, col = "chocolate", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.23 )
+roc_curves <- plot.roc(valid.df$CBK, preds_CART, print.auc = TRUE, col = "cyan", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.18 )
+roc_curves <- plot.roc(valid.df$CBK, preds_TBAG, print.auc = TRUE, col = "darkgoldenrod", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.13 )
+roc_curves <- plot.roc(valid.df$CBK, preds_RF, print.auc = TRUE, col = "darkmagenta", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.08 )
+roc_curves <- plot.roc(valid.df$CBK, preds_GBM, print.auc = TRUE, col = "darkolivegreen", add = TRUE, print.auc.x = 0.2, print.auc.y = 0.03 )
+
+legend("bottomright", legend=c("LDA", "GLM", "SVM", "KNN", "NB", "CART", "TBAG", "RF", "GBM"),
+       col=c("blue", "red", "burlywood4", "chartreuse", "chocolate", "cyan", "darkgoldenrod", "darkmagenta",
+             "darkolivegreen"), lwd=2)
+```
+
+
+```{r}
+
+library(PRROC)
+library(ROCR)
+
+scores_LDA <- data.frame(valid.df$CBK, preds_LDA)
+scores_GLM <- data.frame(valid.df$CBK, preds_GLM)
+scores_SVM <- data.frame(valid.df$CBK, preds_SVM)
+scores_KNN <- data.frame(valid.df$CBK, preds_KNN)
+scores_NB <- data.frame(valid.df$CBK, preds_NB)
+scores_CART <- data.frame(valid.df$CBK, preds_CART)
+scores_TBAG <- data.frame(valid.df$CBK, preds_TBAG)
+scores_RF <- data.frame(valid.df$CBK, preds_RF)
+scores_GBM <- data.frame(valid.df$CBK, preds_GBM)
+
+
+scores_LDA.class0 = scores_LDA[scores_LDA$valid.df.CBK == "1",]$preds_LDA
+scores_LDA.class1 = scores_LDA[scores_LDA$valid.df.CBK == "0",]$preds_LDA
+
+pr_LDA <- pr.curve(scores.class0 = scores_LDA.class0, scores.class1 = scores_LDA.class1, curve =TRUE,
+                max.compute = T, min.compute = T, rand.compute = T)
+
+print(pr_LDA)
+
+
+  plot(pr_LDA, auc.main = FALSE, color = 2, lwd = 1)
+  
+  scores_GLM.class0 = scores_GLM[scores_GLM$valid.df.CBK == "1",]$preds_GLM
+  scores_GLM.class1 = scores_GLM[scores_GLM$valid.df.CBK == "0",]$preds_GLM
+  
+  pr_GLM <- pr.curve(scores.class0 = scores_GLM.class0, scores.class1 = scores_GLM.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_GLM)
+  plot(pr_GLM, add = TRUE, color = 3, lwd = 1, print.auc = TRUE, print.auc.y = .4)
+  
+  scores_SVM.class0 = scores_SVM[scores_SVM$valid.df.CBK == "1",]$preds_SVM
+  scores_SVM.class1 = scores_SVM[scores_SVM$valid.df.CBK == "0",]$preds_SVM
+  
+  pr_SVM <- pr.curve(scores.class0 = scores_SVM.class0, scores.class1 = scores_SVM.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_SVM)
+  plot(pr_SVM, add = TRUE, color = 4, lwd = 1)
+  
+  scores_KNN.class0 = scores_KNN[scores_KNN$valid.df.CBK == "1",]$preds_KNN
+  scores_KNN.class1 = scores_KNN[scores_KNN$valid.df.CBK == "0",]$preds_KNN
+  
+  pr_KNN <- pr.curve(scores.class0 = scores_KNN.class0, scores.class1 = scores_KNN.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_KNN)
+  plot(pr_KNN, add = TRUE, color = 5, lwd = 1)
+  
+  scores_NB.class0 = scores_NB[scores_NB$valid.df.CBK == "1",]$preds_NB
+  scores_NB.class1 = scores_NB[scores_NB$valid.df.CBK == "0",]$preds_NB
+  
+  pr_NB <- pr.curve(scores.class0 = scores_NB.class0, scores.class1 = scores_NB.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_NB)
+  plot(pr_NB, add = TRUE, color = 6, lwd = 1)
+  
+  scores_CART.class0 = scores_CART[scores_CART$valid.df.CBK == "1",]$preds_CART
+  scores_CART.class1 = scores_CART[scores_CART$valid.df.CBK == "0",]$preds_CART
+  
+  pr_CART <- pr.curve(scores.class0 = scores_CART.class0, scores.class1 = scores_CART.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_CART)
+  plot(pr_CART, add = TRUE, color = 7, lwd = 1)
+  
+  scores_TBAG.class0 = scores_TBAG[scores_TBAG$valid.df.CBK == "1",]$preds_TBAG
+  scores_TBAG.class1 = scores_TBAG[scores_TBAG$valid.df.CBK == "0",]$preds_TBAG
+  
+  pr_TBAG <- pr.curve(scores.class0 = scores_TBAG.class0, scores.class1 = scores_TBAG.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_TBAG)
+  plot(pr_TBAG, add = TRUE, color = 8, lwd = 1)
+  
+  scores_RF.class0 = scores_RF[scores_RF$valid.df.CBK == "1",]$preds_RF
+  scores_RF.class1 = scores_RF[scores_RF$valid.df.CBK == "0",]$preds_RF
+  
+  pr_RF <- pr.curve(scores.class0 = scores_RF.class0, scores.class1 = scores_RF.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_RF)
+  plot(pr_RF, add = TRUE, color = 9, lwd = 1)
+  
+  scores_GBM.class0 = scores_GBM[scores_GBM$valid.df.CBK == "1",]$preds_GBM
+  scores_GBM.class1 = scores_GBM[scores_GBM$valid.df.CBK == "0",]$preds_GBM
+  
+  pr_GBM <- pr.curve(scores.class0 = scores_RF.class0, scores.class1 = scores_RF.class1, curve =TRUE,
+                  max.compute = T, min.compute = T, rand.compute = T)
+  print(pr_GBM)
+  plot(pr_GBM, add = TRUE, color = 10, lwd = 1)
+  
+  legend("topright", legend=c(paste("AUC_LDA", substr(toString(pr_LDA$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_GLM", substr(toString(pr_GLM$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_SVM", substr(toString(pr_SVM$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_KNN", substr(toString(pr_KNN$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_NB", substr(toString(pr_NB$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_CART", substr(toString(pr_CART$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_TBAG", substr(toString(pr_TBAG$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_RF", substr(toString(pr_RF$auc.integral),1,5), sep = " : "), 
+                                 paste("AUC_GBM", substr(toString(pr_GBM$auc.integral),1,5), sep = " : ")),
+         col=c(2, 3, 4, 5, 6, 7, 8, 9,10), lwd=1)
+
+```
+
+<span style="color:red"><p style="font-family: times, serif; font-size:14pt; font-style:italic"> **From the Plot Above, CART algorithm is giving us BEST results with AUC score of 0.184, in predicting the minority class. However, Logistic Regression with ROSE sampling is giving us similar results** </p></span>
+
+
+
+
+
+
+
+
+
+
+
